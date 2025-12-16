@@ -58,6 +58,19 @@ except ImportError as e:
 try:
     import gradio as gr
     logger.info("✅ Gradio 로드 완료")
+    # ASR 모델 및 핸들러 로드
+    try:
+        from model_loader import load_model
+        from gradio_handlers import (
+            process_vad_audio_stream,
+            start_vad_session_handler,
+            stop_vad_session_handler,
+            reset_vad_session_handler,
+        )
+        logger.info("✅ ASR 핸들러 및 모델 API import 완료")
+    except Exception as e:
+        logger.warning(f"⚠️ ASR 핸들러/모델 import 실패: {e}")
+        logger.warning("⚠️ ASR 관련 기능이 제한될 수 있습니다.")
 except ImportError:
     logger.error("❌ Gradio를 찾을 수 없습니다. pip install gradio를 실행하세요.")
     sys.exit(1)
@@ -86,6 +99,18 @@ if __name__ == "__main__":
                 logger.info(f"📋 등록된 엔드포인트: {len(endpoints)}개")
         except Exception as e:
             logger.error(f"⚠️ 응급 알림 관리자 초기화 실패: {e}")
+
+    # 모델 로딩 (ASR)
+    if "load_model" in globals():
+        try:
+            load_model()
+            logger.info("✅ ASR 모델 로딩 완료")
+        except Exception as e:
+            logger.error(f"\n❌ 모델 로딩 실패: {e}", exc_info=True)
+            logger.error("\n프로그램 종료")
+            sys.exit(1)
+    else:
+        logger.warning("⚠️ ASR 모델 로더가 없습니다. 음성인식 기능이 제한됩니다.")
 
     # Gradio UI 생성
     logger.info("\n🎨 Gradio UI 생성 중...")
@@ -135,13 +160,55 @@ if __name__ == "__main__":
                             value="자동 감지",
                             label="언어 선택"
                         )
+
+                        ground_truth_input = gr.Textbox(
+                            label="정답 (선택)",
+                            placeholder="정답 문구를 입력하세요 (옵션)",
+                        )
                         
+                        # 제어 버튼
+                        with gr.Row():
+                            start_vad_btn = gr.Button("🎙️ 음성인식 시작", size="md")
+                            stop_vad_btn = gr.Button("⏹️ 음성인식 종료", variant="stop", size="md")
+                            reset_vad_btn = gr.Button("🔄 새로 시작", variant="secondary", size="sm")
+                        
+
+
                     with gr.Column():
                         output_text = gr.Textbox(
                             label="📄 음성인식 결과",
                             lines=15,
                             max_lines=20,
                             autoscroll=True,
+                        )
+
+                        # 스트리밍 핸들러 연결 (output_text가 선언된 후 연결)
+                        try:
+                            audio_input.stream(
+                                fn=process_vad_audio_stream,
+                                inputs=[audio_input, language],
+                                outputs=output_text,
+                            )
+                        except Exception as e:
+                            logger.warning(f"⚠️ 스트리밍 핸들러 연결 실패: {e}")
+
+                        # 버튼 이벤트 연결
+                        start_vad_btn.click(
+                            fn=start_vad_session_handler,
+                            inputs=None,
+                            outputs=[start_vad_btn, stop_vad_btn, audio_input, output_text],
+                        )
+
+                        stop_vad_btn.click(
+                            fn=stop_vad_session_handler,
+                            inputs=[ground_truth_input],
+                            outputs=[output_text, ground_truth_input],
+                        )
+
+                        reset_vad_btn.click(
+                            fn=reset_vad_session_handler,
+                            inputs=None,
+                            outputs=[audio_input, output_text, ground_truth_input],
                         )
                 
                 gr.Markdown("""
