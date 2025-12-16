@@ -1,0 +1,16 @@
+# API 전송 관련
+requests>=2.31.0
+urllib3>=2.0.0
+
+# UI 관련
+gradio>=4.0.0
+
+# 테스트용 서버
+flask>=3.0.0
+
+# 데이터베이스 (Python 기본 포함)
+# sqlite3
+
+# 음성 인식 (선택적)
+# sherpa-onnx>=1.9.0
+# numpy>=1.24.0
