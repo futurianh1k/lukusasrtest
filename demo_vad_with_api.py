@@ -23,6 +23,8 @@ import os
 import sys
 import warnings
 import logging
+import importlib
+import traceback
 
 # 경고 메시지 무시
 warnings.filterwarnings("ignore")
@@ -58,19 +60,87 @@ except ImportError as e:
 try:
     import gradio as gr
     logger.info("✅ Gradio 로드 완료")
-    # ASR 모델 및 핸들러 로드
+    # ASR 모델 및 핸들러 로드 (여러 import 경로 시도)
+    ASR_HANDLERS_AVAILABLE = False
     try:
         from model_loader import load_model
-        from gradio_handlers import (
-            process_vad_audio_stream,
-            start_vad_session_handler,
-            stop_vad_session_handler,
-            reset_vad_session_handler,
-        )
-        logger.info("✅ ASR 핸들러 및 모델 API import 완료")
     except Exception as e:
-        logger.warning(f"⚠️ ASR 핸들러/모델 import 실패: {e}")
-        logger.warning("⚠️ ASR 관련 기능이 제한될 수 있습니다.")
+        logger.warning(f"⚠️ model_loader import 실패: {e}")
+
+    try:
+        # 절대 import 우선 (스크립트로 실행하는 경우)
+        try:
+            from gradio_handlers import (
+                process_vad_audio_stream,
+                start_vad_session_handler,
+                stop_vad_session_handler,
+                reset_vad_session_handler,
+            )
+            ASR_HANDLERS_AVAILABLE = True
+            logger.info("✅ ASR 핸들러 import (절대 import) 성공")
+        except Exception as e1:
+            logger.warning(f"⚠️ 절대 import 실패: {type(e1).__name__}: {e1}")
+            logger.warning(traceback.format_exc())
+            # 패키지 이름이 있을 경우 (예: rk3588asr 패키지로 사용)
+            try:
+                from gradio_handlers import (
+                    process_vad_audio_stream,
+                    start_vad_session_handler,
+                    stop_vad_session_handler,
+                    reset_vad_session_handler,
+                )
+                ASR_HANDLERS_AVAILABLE = True
+                logger.info("✅ ASR 핸들러 import (패키지 상대 import) 성공")
+            except Exception as e2:
+                logger.warning(f"⚠️ 패키지 import 실패: {type(e2).__name__}: {e2}")
+                logger.warning(traceback.format_exc())
+                # 마지막 시도: importlib.import_module to capture errors
+                try:
+                    importlib.import_module('gradio_handlers')
+                    m = importlib.import_module('gradio_handlers')
+                    process_vad_audio_stream = getattr(m, 'process_vad_audio_stream', None)
+                    start_vad_session_handler = getattr(m, 'start_vad_session_handler', None)
+                    stop_vad_session_handler = getattr(m, 'stop_vad_session_handler', None)
+                    reset_vad_session_handler = getattr(m, 'reset_vad_session_handler', None)
+                    if process_vad_audio_stream and start_vad_session_handler:
+                        ASR_HANDLERS_AVAILABLE = True
+                        logger.info("✅ gradio_handlers import via importlib 성공")
+                except Exception as e3:
+                    logger.warning(f"⚠️ importlib 시도 실패: {type(e3).__name__}: {e3}")
+                    logger.warning(traceback.format_exc())
+
+                if not ASR_HANDLERS_AVAILABLE:
+                    logger.warning("⚠️ ASR 핸들러 import 모두 실패")
+                    logger.warning("⚠️ ASR 관련 기능(음성인식 UI 연동)이 비활성화됩니다.")
+    except Exception as e:
+        logger.error(f"예상치 못한 오류 발생: {e}")
+        logger.error(traceback.format_exc())
+
+    # 핸들러가 없을 때를 대비한 안전한 스텁 정의
+    if not ASR_HANDLERS_AVAILABLE:
+        logger.info("ℹ️ ASR 핸들러가 없으므로 대체 스텁을 생성합니다.")
+
+        def start_vad_session_handler():
+            logger.warning("요청된 start_vad_session_handler는 사용 불가합니다.")
+            return [
+                gr.update(interactive=True, value="🎙️ 음성인식 시작"),
+                gr.update(interactive=False),
+                None,
+                "⚠️ ASR 모듈을 사용할 수 없습니다."
+            ]
+
+        def stop_vad_session_handler(ground_truth_input=None):
+            logger.warning("요청된 stop_vad_session_handler는 사용 불가합니다.")
+            return ("⚠️ ASR 모듈을 사용할 수 없습니다.", "")
+
+        def reset_vad_session_handler():
+            logger.warning("요청된 reset_vad_session_handler는 사용 불가합니다.")
+            return (None, "⚠️ ASR 모듈을 사용할 수 없습니다.", "")
+
+        def process_vad_audio_stream(audio_stream, language):
+            # 스트리밍 핸들러는 제너레이터여야 함
+            yield "⚠️ ASR 모듈을 사용할 수 없습니다."
+
 except ImportError:
     logger.error("❌ Gradio를 찾을 수 없습니다. pip install gradio를 실행하세요.")
     sys.exit(1)
@@ -182,34 +252,62 @@ if __name__ == "__main__":
                             autoscroll=True,
                         )
 
-                        # 스트리밍 핸들러 연결 (output_text가 선언된 후 연결)
-                        try:
-                            audio_input.stream(
-                                fn=process_vad_audio_stream,
-                                inputs=[audio_input, language],
+                        # 스트리밍 핸들러 및 버튼 이벤트 연결 (핸들러 유효성 검사)
+                        if ASR_HANDLERS_AVAILABLE:
+                            try:
+                                audio_input.stream(
+                                    fn=process_vad_audio_stream,
+                                    inputs=[audio_input, language],
+                                    outputs=output_text,
+                                )
+                                logger.info("✅ 오디오 스트리밍 핸들러 연결 완료")
+                            except Exception as e:
+                                logger.warning(f"⚠️ 스트리밍 핸들러 연결 실패: {e}")
+                        else:
+                            logger.warning("⚠️ ASR 핸들러를 사용할 수 없습니다.")
+                            # 초기 안내 텍스트 설정
+                            output_text.value = "⚠️ ASR 모듈을 사용할 수 없습니다. 음성인식 기능이 비활성화되었습니다."
+
+                        # start 버튼 연결 또는 대체 동작
+                        if ASR_HANDLERS_AVAILABLE:
+                            start_vad_btn.click(
+                                fn=start_vad_session_handler,
+                                inputs=None,
+                                outputs=[start_vad_btn, stop_vad_btn, audio_input, output_text],
+                            )
+                        else:
+                            # 비활성화된 상태에서는 안내 메시지 출력
+                            start_vad_btn.click(
+                                fn=lambda: "⚠️ ASR 모듈을 사용할 수 없습니다.",
+                                inputs=None,
                                 outputs=output_text,
                             )
-                        except Exception as e:
-                            logger.warning(f"⚠️ 스트리밍 핸들러 연결 실패: {e}")
 
-                        # 버튼 이벤트 연결
-                        start_vad_btn.click(
-                            fn=start_vad_session_handler,
-                            inputs=None,
-                            outputs=[start_vad_btn, stop_vad_btn, audio_input, output_text],
-                        )
+                        if ASR_HANDLERS_AVAILABLE:
+                            stop_vad_btn.click(
+                                fn=stop_vad_session_handler,
+                                inputs=[ground_truth_input],
+                                outputs=[output_text, ground_truth_input],
+                            )
+                        else:
+                            stop_vad_btn.click(
+                                fn=lambda gt=None: ("⚠️ ASR 모듈을 사용할 수 없습니다.", ""),
+                                inputs=[ground_truth_input],
+                                outputs=[output_text, ground_truth_input],
+                            )
 
-                        stop_vad_btn.click(
-                            fn=stop_vad_session_handler,
-                            inputs=[ground_truth_input],
-                            outputs=[output_text, ground_truth_input],
-                        )
-
-                        reset_vad_btn.click(
-                            fn=reset_vad_session_handler,
-                            inputs=None,
-                            outputs=[audio_input, output_text, ground_truth_input],
-                        )
+                        if ASR_HANDLERS_AVAILABLE:
+                            reset_vad_btn.click(
+                                fn=reset_vad_session_handler,
+                                inputs=None,
+                                outputs=[audio_input, output_text, ground_truth_input],
+                            )
+                        else:
+                            reset_vad_btn.click(
+                                fn=lambda: (None, "⚠️ ASR 모듈을 사용할 수 없습니다.", ""),
+                                inputs=None,
+                                outputs=[audio_input, output_text, ground_truth_input],
+                            )
                 
                 gr.Markdown("""
                 **💡 참고:**

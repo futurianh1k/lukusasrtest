@@ -14,19 +14,36 @@ import soundfile as sf
 from datetime import datetime
 from typing import Optional
 
-from .config import LANGUAGE_MAP, GROUND_TRUTHS, LABELS
-from .model_loader import recognizer, vad_stream_processor
-from .vad_processor import StreamingProcessor
-from .session_manager import (
-    mic_session_recorder,
-    clear_vad_chat_history,
-    add_to_vad_chat_history,
-    format_vad_chat_history,
-)
-from .matcher import SpeechRecognitionMatcher
-from .emergency_alert import send_emergency_alert
-from .report_generator import generate_mic_session_csv_report, generate_batch_csv_report
-from .utils import resample_audio, read_wave
+# 상대/절대 import 병행 (스크립트와 패키지 모두 지원)
+try:
+    # 절대 import (스크립트로 실행할 때)
+    from config import LANGUAGE_MAP, GROUND_TRUTHS, LABELS
+    from model_loader import recognizer, vad_stream_processor
+    from vad_processor import StreamingProcessor
+    from session_manager import (
+        mic_session_recorder,
+        clear_vad_chat_history,
+        add_to_vad_chat_history,
+        format_vad_chat_history,
+    )
+    from matcher import SpeechRecognitionMatcher
+    from report_generator import generate_mic_session_csv_report, generate_batch_csv_report
+    from utils import resample_audio, read_wave
+except ImportError:
+    # 상대 import (패키지로 실행할 때)
+    from .config import LANGUAGE_MAP, GROUND_TRUTHS, LABELS
+    from .model_loader import recognizer, vad_stream_processor
+    from .vad_processor import StreamingProcessor
+    from .session_manager import (
+        mic_session_recorder,
+        clear_vad_chat_history,
+        add_to_vad_chat_history,
+        format_vad_chat_history,
+    )
+    from .matcher import SpeechRecognitionMatcher
+    from .emergency_alert import send_emergency_alert
+    from .report_generator import generate_mic_session_csv_report, generate_batch_csv_report
+    from .utils import resample_audio, read_wave
 
 logger = logging.getLogger(__name__)
 
@@ -285,13 +302,23 @@ def process_vad_audio_stream(audio_stream, language):
             emergency_keywords = []
             
             if match_result.get("is_emergency", False):
-                is_emergency = True
-                emergency_keywords = match_result.get("emergency_keywords", [])
-                logger.warning(f"🚨 실시간 응급 상황 감지! 키워드: {emergency_keywords}")
-                
-                # API 호출
-                send_emergency_alert(text, emergency_keywords)
-            
+                    is_emergency = True
+                    emergency_keywords = match_result.get("emergency_keywords", [])
+                    logger.warning(f"🚨 실시간 응급 상황 감지! 키워드: {emergency_keywords}")
+
+                    # API 호출 (모듈을 런타임에 안전하게 import)
+                    try:
+                        from emergency_alert import send_emergency_alert
+                    except Exception:
+                        try:
+                            from .emergency_alert import send_emergency_alert
+                        except Exception as e:
+                            logger.warning(f"⚠️ send_emergency_alert import 실패: {e}")
+                            send_emergency_alert = None
+                    if send_emergency_alert:
+                        send_emergency_alert(text, emergency_keywords)
+                    else:
+                        logger.info("ℹ️ 응급 알림 모듈이 없어 전송을 건너뜁니다.")
             # 채팅 히스토리에 추가
             add_to_vad_chat_history(timestamp, text, duration, is_emergency, emergency_keywords)
             
@@ -410,7 +437,18 @@ def stop_recording_handler(ground_truth_input):
         if match_result.get("is_emergency", False):
             emergency_keywords = match_result.get("emergency_keywords", [])
             logger.warning(f"🚨 응급 상황 감지됨! 키워드: {emergency_keywords}")
-            send_emergency_alert(final_text, emergency_keywords)
+            try:
+                from emergency_alert import send_emergency_alert
+            except Exception:
+                try:
+                    from .emergency_alert import send_emergency_alert
+                except Exception as e:
+                    logger.warning(f"⚠️ send_emergency_alert import 실패: {e}")
+                    send_emergency_alert = None
+            if send_emergency_alert:
+                send_emergency_alert(final_text, emergency_keywords)
+            else:
+                logger.info("ℹ️ 응급 알림 모듈이 없어 전송을 건너뜁니다.")
 
         session_count = mic_session_recorder.get_session_count()
 
@@ -484,7 +522,18 @@ def collect_and_process_audio(audio_stream, language):
             if match_result.get("is_emergency", False):
                 emergency_keywords = match_result.get("emergency_keywords", [])
                 logger.warning(f"🚨 실시간 응급 상황 감지됨! 키워드: {emergency_keywords}")
-                send_emergency_alert(result_text, emergency_keywords)
+                try:
+                    from emergency_alert import send_emergency_alert
+                except Exception:
+                    try:
+                        from .emergency_alert import send_emergency_alert
+                    except Exception as e:
+                        logger.warning(f"⚠️ send_emergency_alert import 실패: {e}")
+                        send_emergency_alert = None
+                if send_emergency_alert:
+                    send_emergency_alert(result_text, emergency_keywords)
+                else:
+                    logger.info("ℹ️ 응급 알림 모듈이 없어 전송을 건너뜁니다.")
             
             yield f"🔴 녹음 중... ({duration:.1f}초)\n\n✅ 실시간 인식:\n{result_text}"
         else:

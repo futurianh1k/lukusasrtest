@@ -8,11 +8,16 @@
 import logging
 import uuid
 import urllib.parse
+import os
 from datetime import datetime
 from typing import List
 import requests
 
-from .config import EMERGENCY_API_CONFIG
+# config import (absolute first, then relative)
+try:
+    from config import EMERGENCY_API_CONFIG
+except Exception:
+    from .config import EMERGENCY_API_CONFIG
 
 logger = logging.getLogger(__name__)
 
